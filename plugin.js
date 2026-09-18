@@ -410,6 +410,7 @@ var rtext = releaseText(job.element);
         releaseText(element)
     ) || titleRows(element)
 );
+            return
         }
         var link = element.Link || element.link || element.MagnetUri || element.url;
         if (link && cache[link] && cache[link].state === 'done') { renderRows(item, cache[link].rows); return; }
@@ -432,7 +433,7 @@ var rtext = releaseText(job.element);
         var pt = parseTitle(element.title || element.Title || '');
         var rtext = releaseText(element);
         if (element.ffprobe && Array.isArray(element.ffprobe) && element.ffprobe.length) {
-            renderRows(item, safeRows(element.ffprobe, pt) || titleRows(element)); return;
+            renderRows(item, safeRows(element.ffprobe, pt, rtext) || titleRows(element)); return;
         }
         var hash = element.torrent_hash || element.info_hash || extractHash(element.hash);
         if (!hash) return;
