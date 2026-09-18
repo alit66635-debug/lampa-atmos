@@ -12,7 +12,7 @@
        v1.2: сброс отравленного кэша + жёсткий лимит отрисовки.
        ═══════════════════════════════════════════════════════════ */
 
-    var VERSION     = '1.2';
+    var VERSION     = '1.3-atmos.desc';
     var DEBUG       = false;
     var HOST185     = '185.204.0.61:8080';
     var TS_BASES    = [];
@@ -23,7 +23,7 @@
     var MAX_SUBS    = 10;
     var MAX_RENDER  = 16;    // жёсткий потолок чипов на строку (защита от зависания)
     var VIDEO_EXT   = /\.(mkv|mp4|avi|m4v|mov|ts|m2ts|mpg|mpeg|webm|wmv)$/i;
-    var CACHE_KEY   = 'mediainfo_cache_v2';   // v2 — старый отравленный кэш игнорируется
+    var CACHE_KEY   = 'mediainfo_cache_v3';   // v2 — старый отравленный кэш игнорируется
 
     var ffpAvailable = true;
     var cache = {}, queue = [], running = 0, autoCount = 0;
@@ -84,6 +84,53 @@
                 : /\bhlg\b/.test(s) ? 'HLG' : '';
         return { res: res, codec: codec, hdr: hdr };
     }
+    function releaseText(element) {
+    if (!element) return '';
+
+    var parts = [];
+
+    [
+        'description',
+        'Description',
+        'desc',
+        'comment',
+        'Comment',
+        'comments'
+    ].forEach(function (key) {
+        var v = element[key];
+        if (v !== undefined && v !== null && String(v).trim()) {
+            parts.push(String(v));
+        }
+    });
+
+    // Иногда парсер складывает исходный результат внутрь объекта
+    var nested = [
+        element.result,
+        element.Result,
+        element.torrent,
+        element.data
+    ];
+
+    nested.forEach(function (obj) {
+        if (!obj || typeof obj !== 'object') return;
+
+        [
+            'description',
+            'Description',
+            'desc',
+            'comment',
+            'Comment',
+            'comments'
+        ].forEach(function (key) {
+            var v = obj[key];
+            if (v !== undefined && v !== null && String(v).trim()) {
+                parts.push(String(v));
+            }
+        });
+    });
+
+    return parts.join('\n');
+    }
     function titleVideoChip(pt) {
         var vp = [];
         if (pt.res) vp.push(pt.res);
@@ -118,7 +165,66 @@
         if (cp === 'bt2020') return 'HDR';
         return '';
     }
-    function isAtmos(a) { return /atmos|joc/i.test(a.profile || '') || /atmos/i.test((a.tags && a.tags.title) || ''); }
+    function isAtmos(a, text) {
+    // Нормальное определение через ffprobe
+    if (
+        /atmos|joc/i.test(a.profile || '') ||
+        /atmos/i.test((a.tags && a.tags.title) || '') ||
+        /atmos/i.test(a.codec_long_name || '')
+    ) {
+        return true;
+    }
+
+    text = String(text || '');
+    if (!text) return false;
+
+    // Нужен именно явный Atmos.
+    // Просто E-AC3 5.1 НЕ считаем Atmos.
+    if (!(
+        /\bdolby\s+atmos\b/i.test(text) ||
+        /\be-?ac3\s*\+\s*atmos\b/i.test(text) ||
+        /\beac3\s*\+\s*atmos\b/i.test(text) ||
+        /\bddp\s*\+\s*atmos\b/i.test(text) ||
+        /\bdd\+\s*\+\s*atmos\b/i.test(text) ||
+        /\bjoc\b/i.test(text)
+    )) {
+        return false;
+    }
+
+    /*
+     * Если в описании явно указан язык дорожки,
+     * привязываем Atmos к нему.
+     *
+     * Например:
+     * English E-AC3 + Atmos / 5.1
+     *
+     * Тогда ENG получает Atmos, а RUS — нет.
+     */
+    var lang = cleanLang(a.tags && a.tags.language).toLowerCase();
+
+    if (lang === 'eng' || lang === 'en') {
+        if (/\benglish\b/i.test(text) || /\beng\b/i.test(text)) return true;
+    }
+
+    if (lang === 'rus' || lang === 'ru') {
+        if (/\brussian\b/i.test(text) || /\brus\b/i.test(text) || /\brussian\b/i.test(text)) return true;
+    }
+
+    if (lang === 'ukr' || lang === 'uk') {
+        if (/\bukrainian\b/i.test(text) || /\bukr\b/i.test(text)) return true;
+    }
+
+    /*
+     * Если язык в описании вообще не указан —
+     * используем явное указание Atmos как запасной вариант.
+     */
+    var hasExplicitLanguage =
+        /\benglish\b|\brussian\b|\brus\b|\bukrainian\b|\bukr\b|\beng\b/i.test(text);
+
+    if (!hasExplicitLanguage) return true;
+
+    return false;
+    }
     function chTxt(a) {
         if (a.channel_layout && /^[0-9a-z.()+ -]{1,12}$/i.test(a.channel_layout)) return a.channel_layout.replace('stereo', '2.0').replace('mono', '1.0').replace(/\(side\)|\(rear\)/g, '');
         if (a.channels === 8) return '7.1'; if (a.channels === 6) return '5.1';
@@ -127,7 +233,7 @@
     }
     function videoOf(streams) { return streams.filter(function (s) { return s.codec_type === 'video' && s.codec_name !== 'mjpeg' && s.codec_name !== 'png'; })[0]; }
 
-    function build(streams) {
+    function build(streams, releaseText) {
         var out = [];
         var v = videoOf(streams);
         if (v) {
@@ -144,7 +250,7 @@
             var lg = cleanLang(a.tags && a.tags.language); if (lg) p.push(lg);
             var cc = cleanCodec(a.codec_name); if (cc) p.push(cc);
             var ch = chTxt(a); if (ch) p.push(ch);
-            if (isAtmos(a)) p.push('Atmos');
+            if (isAtmos(a, releaseText)) p.push('Atmos');
             var ab = bps(a); if (ab > 0 && ab <= 12e6) p.push(Math.round(ab / 1000) + ' кб/с');
             var nm = a.tags && (a.tags.title || a.tags.handler_name);
             if (nm && !/SoundHandler|AudioHandler/i.test(nm)) { nm = String(nm).replace(/[<>]/g, ''); if (nm.length > 18) nm = nm.slice(0, 18) + '…'; p.push(nm); }
@@ -162,9 +268,8 @@
         if (sl.length) out.push({ c: 's', t: 'T ' + sl.join(' / ') });
         return out;
     }
-
-    function mergeRows(streams, pt) {
-        var rows = build(streams);
+function mergeRows(streams, pt, releaseText) {
+    var rows = build(streams, releaseText);
         var v = rows.filter(function (r) { return r.c === 'v'; })[0];
         if (!v) { var c = titleVideoChip(pt); if (c) rows.unshift(c); }
         else {
@@ -175,7 +280,7 @@
     }
 
     /* отсев явного мусора (троллинг-ответ сервера) */
-    function safeRows(streams, pt) {
+    function safeRows(streams, pt, releaseText) {
         if (!streams || !streams.length) return null;
         var a = 0, s = 0;
         for (var i = 0; i < streams.length; i++) {
@@ -183,7 +288,7 @@
             else if (streams[i].codec_type === 'subtitle') s++;
         }
         if (a > 12 || s > 24 || streams.length > 48) return null;
-        var rows = mergeRows(streams, pt);
+        var rows = mergeRows(streams, pt, releaseText);
         return rows.length ? rows : null;
     }
 
@@ -272,11 +377,12 @@
     function resolveJob(job, onDone) {
         cache[job.link] = { state: 'pending' };
         var pt = parseTitle(job.element.Title || job.element.title);
-        var trows = titleRows(job.element);
+var trows = titleRows(job.element);
+var rtext = releaseText(job.element);
         var direct = extractHash(job.element.MagnetUri) || extractHash(job.element.Link);
 
         function finish(streams) {
-            var rows = safeRows(streams, pt);
+            var rows = safeRows(streams, pt, rtext);
             if (rows) { cache[job.link] = { state: 'done', rows: rows }; saveCache(); }
             else { rows = trows; cache[job.link] = null; }
             renderRows(job.item, rows, false);
@@ -296,8 +402,14 @@
     /* ── событие torrent (Android TV: список раздач) ─────────── */
     function onTorrentRender(element, item) {
         if (element.ffprobe && element.ffprobe.length) {
-            renderRows(item, safeRows(element.ffprobe, parseTitle(element.Title || element.title)) || titleRows(element));
-            return;
+            renderRows(
+    item,
+    safeRows(
+        element.ffprobe,
+        parseTitle(element.Title || element.title),
+        releaseText(element)
+    ) || titleRows(element)
+);
         }
         var link = element.Link || element.link || element.MagnetUri || element.url;
         if (link && cache[link] && cache[link].state === 'done') { renderRows(item, cache[link].rows); return; }
@@ -318,6 +430,7 @@
     /* ── событие torrent_file (браузер/внутр. плеер: файлы) ──── */
     function onFileRender(element, item) {
         var pt = parseTitle(element.title || element.Title || '');
+        var rtext = releaseText(element);
         if (element.ffprobe && Array.isArray(element.ffprobe) && element.ffprobe.length) {
             renderRows(item, safeRows(element.ffprobe, pt) || titleRows(element)); return;
         }
@@ -329,9 +442,8 @@
 
         renderRows(item, titleRows(element), true);
         fetchByHash(hash, idx, function (streams) {
-            var rows = safeRows(streams, pt);
-            if (rows) { cache[ckey] = { state: 'done', rows: rows }; saveCache(); renderRows(item, rows, false); }
-            else renderRows(item, titleRows(element), false);
+            var rows = safeRows(streams, pt, rtext);
+            if (rows) { cache[ckey] = { state: 'done', rows: rows }; saveCache(); renderRows(item, safeRows(element.ffprobe, pt, rtext) || titleRows(element)); return;
         });
     }
 
