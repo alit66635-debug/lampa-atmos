@@ -430,23 +430,46 @@ var rtext = releaseText(job.element);
 
     /* ── событие torrent_file (браузер/внутр. плеер: файлы) ──── */
     function onFileRender(element, item) {
-        var pt = parseTitle(element.title || element.Title || '');
-        var rtext = releaseText(element);
-        if (element.ffprobe && Array.isArray(element.ffprobe) && element.ffprobe.length) {
-            renderRows(item, safeRows(element.ffprobe, pt, rtext) || titleRows(element)); return;
-        }
-        var hash = element.torrent_hash || element.info_hash || extractHash(element.hash);
-        if (!hash) return;
-        var idx = element.id !== undefined ? element.id : (element.file_index !== undefined ? element.file_index : 0);
-        var ckey = 'h_' + hash + '_' + idx;
-        if (cache[ckey] && cache[ckey].state === 'done') { renderRows(item, cache[ckey].rows); return; }
+    var pt = parseTitle(element.title || element.Title || '');
+    var rtext = releaseText(element);
 
-        renderRows(item, titleRows(element), true);
-        fetchByHash(hash, idx, function (streams) {
-            var rows = safeRows(streams, pt, rtext);
-            if (rows) { cache[ckey] = { state: 'done', rows: rows }; saveCache(); renderRows(item, safeRows(element.ffprobe, pt, rtext) || titleRows(element)); return;
-        });
+    if (element.ffprobe && Array.isArray(element.ffprobe) && element.ffprobe.length) {
+        renderRows(
+            item,
+            safeRows(element.ffprobe, pt, rtext) || titleRows(element)
+        );
+        return;
     }
+
+    var hash = element.torrent_hash || element.info_hash || extractHash(element.hash);
+    if (!hash) return;
+
+    var idx = element.id !== undefined
+        ? element.id
+        : (element.file_index !== undefined ? element.file_index : 0);
+
+    var ckey = 'h_' + hash + '_' + idx;
+
+    if (cache[ckey] && cache[ckey].state === 'done') {
+        renderRows(item, cache[ckey].rows);
+        return;
+    }
+
+    renderRows(item, titleRows(element), true);
+
+    fetchByHash(hash, idx, function (streams) {
+        var rows = safeRows(streams, pt, rtext);
+
+        if (rows) {
+            cache[ckey] = { state: 'done', rows: rows };
+            saveCache();
+            renderRows(item, rows, false);
+        } else {
+            renderRows(item, titleRows(element), false);
+        }
+    });
+    }
+    
 
     /* ── init ────────────────────────────────────────────────── */
     function buildBases() {
