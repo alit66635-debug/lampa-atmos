@@ -1,33 +1,47 @@
 (function () {
     'use strict';
 
-    function esc(s) {
-        return String(s)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;');
+    function start() {
+        if (!window.Lampa || !Lampa.Listener) return;
+
+        Lampa.Listener.follow('torrent', function (data) {
+            if (!data || data.type !== 'render' || !data.element) return;
+
+            var e = data.element;
+
+            try {
+                var text = JSON.stringify(e, function (k, v) {
+                    if (k === 'item' || k === 'target') return undefined;
+                    if (typeof v === 'function') return undefined;
+                    return v;
+                }, 2);
+
+                var old = document.getElementById('atmos-debug');
+                if (old) old.remove();
+
+                var box = document.createElement('pre');
+                box.id = 'atmos-debug';
+
+                box.style.cssText =
+                    'position:fixed;z-index:999999;' +
+                    'left:2%;right:2%;top:3%;bottom:3%;' +
+                    'overflow:auto;padding:20px;' +
+                    'background:#111;color:#fff;' +
+                    'font-size:14px;white-space:pre-wrap;' +
+                    'font-family:monospace;';
+
+                box.textContent = text;
+
+                document.body.appendChild(box);
+            } catch (err) {
+                console.log('ATMOS DEBUG ERROR', err);
+            }
+        });
     }
 
-    function dump(obj) {
-        var seen = [];
-
-        try {
-            return JSON.stringify(obj, function (key, value) {
-                if (typeof value === 'object' && value !== null) {
-                    if (seen.indexOf(value) >= 0) return '[CIRCULAR]';
-                    seen.push(value);
-                }
-
-                // Не тащим DOM/jQuery в JSON
-                if (key === 'item' || key === 'target') return undefined;
-
-                return value;
-            }, 2);
-        } catch (e) {
-            return 'JSON ERROR: ' + e;
-        }
+    if (window.Lampa && Lampa.Listener) {
+        start();
+    } else {
+        setTimeout(start, 3000);
     }
-
-    function show(element) {
-        try {
-            var old = document.getElementById('atmos-debug-box
+})();
